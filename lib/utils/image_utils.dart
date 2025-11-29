@@ -5,52 +5,83 @@ import 'package:flutter/foundation.dart';
 
 class ImageUtils {
   static Future<List<double>> processCameraImage(CameraImage image) async {
-    // We need to copy data to pass to isolate because CameraImage contains pointers
-    // However, copying might be expensive too. 
-    // For simplicity in this step, let's extract the necessary data.
-    
     final int width = image.width;
     final int height = image.height;
-    final int uvRowStride = image.planes[1].bytesPerRow;
-    final int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
     
-    // Copy bytes to avoid native pointer issues in Isolate
-    final yBytes = Uint8List.fromList(image.planes[0].bytes);
-    final uBytes = Uint8List.fromList(image.planes[1].bytes);
-    final vBytes = Uint8List.fromList(image.planes[2].bytes);
+    // Check format
+    final bool isYUV = image.format.group == ImageFormatGroup.yuv420;
+    
+    Uint8List? yBytes;
+    Uint8List? uBytes;
+    Uint8List? vBytes;
+    Uint8List? bgraBytes;
+    int uvRowStride = 0;
+    int uvPixelStride = 1;
+
+    if (isYUV) {
+      uvRowStride = image.planes[1].bytesPerRow;
+      uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
+      yBytes = Uint8List.fromList(image.planes[0].bytes);
+      uBytes = Uint8List.fromList(image.planes[1].bytes);
+      vBytes = Uint8List.fromList(image.planes[2].bytes);
+    } else {
+      // BGRA8888
+      bgraBytes = Uint8List.fromList(image.planes[0].bytes);
+    }
 
     return compute(_processInIsolate, _IsolateData(
       width: width,
       height: height,
+      isYUV: isYUV,
       uvRowStride: uvRowStride,
       uvPixelStride: uvPixelStride,
       yBytes: yBytes,
       uBytes: uBytes,
       vBytes: vBytes,
+      bgraBytes: bgraBytes,
       inputSize: 640,
     ));
   }
 
   static List<double> _processInIsolate(_IsolateData data) {
-    // YUV conversion
     var imgBuffer = img.Image(width: data.width, height: data.height);
 
-    for (int x = 0; x < data.width; x++) {
-      for (int y = 0; y < data.height; y++) {
-        final int uvIndex =
-            data.uvPixelStride * (x / 2).floor() + data.uvRowStride * (y / 2).floor();
-        final int index = y * data.width + x;
+    if (data.isYUV) {
+      // YUV conversion (Android)
+      for (int x = 0; x < data.width; x++) {
+        for (int y = 0; y < data.height; y++) {
+          final int uvIndex =
+              data.uvPixelStride * (x / 2).floor() + data.uvRowStride * (y / 2).floor();
+          final int index = y * data.width + x;
 
-        final yp = data.yBytes[index];
-        final up = data.uBytes[uvIndex];
-        final vp = data.vBytes[uvIndex];
+          final yp = data.yBytes![index];
+          final up = data.uBytes![uvIndex];
+          final vp = data.vBytes![uvIndex];
 
-        int r = (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
-        int g = (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91)
-            .round()
-            .clamp(0, 255);
-        int b = (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
+          int r = (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
+          int g = (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91)
+              .round()
+              .clamp(0, 255);
+          int b = (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
 
+          imgBuffer.setPixelRgb(x, y, r, g, b);
+        }
+      }
+    } else {
+      // BGRA conversion (iOS)
+      // Input is BGRA, imgBuffer expects RGB (or RGBA)
+      // We need to swap B and R
+      final bytes = data.bgraBytes!;
+      for (int i = 0; i < data.width * data.height; i++) {
+        final int offset = i * 4;
+        final int b = bytes[offset];
+        final int g = bytes[offset + 1];
+        final int r = bytes[offset + 2];
+        // alpha is at offset + 3, ignore for RGB
+        
+        final int x = i % data.width;
+        final int y = i ~/ data.width;
+        
         imgBuffer.setPixelRgb(x, y, r, g, b);
       }
     }
@@ -104,21 +135,25 @@ class ImageUtils {
 class _IsolateData {
   final int width;
   final int height;
+  final bool isYUV;
   final int uvRowStride;
   final int uvPixelStride;
-  final Uint8List yBytes;
-  final Uint8List uBytes;
-  final Uint8List vBytes;
+  final Uint8List? yBytes;
+  final Uint8List? uBytes;
+  final Uint8List? vBytes;
+  final Uint8List? bgraBytes;
   final int inputSize;
 
   _IsolateData({
     required this.width,
     required this.height,
-    required this.uvRowStride,
-    required this.uvPixelStride,
-    required this.yBytes,
-    required this.uBytes,
-    required this.vBytes,
+    required this.isYUV,
+    this.uvRowStride = 0,
+    this.uvPixelStride = 1,
+    this.yBytes,
+    this.uBytes,
+    this.vBytes,
+    this.bgraBytes,
     required this.inputSize,
   });
 }

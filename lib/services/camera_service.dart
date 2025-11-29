@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 
 class CameraService {
   CameraController? _controller;
