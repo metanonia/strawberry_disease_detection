@@ -1,5 +1,4 @@
-import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
+import 'dart:io';
 
 class CameraService {
   CameraController? _controller;
@@ -14,7 +13,9 @@ class CameraService {
         _cameras![0],
         ResolutionPreset.low, // Reduce resolution to avoid OOM
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420, // YUV format for Android
+        imageFormatGroup: Platform.isAndroid 
+            ? ImageFormatGroup.yuv420 
+            : ImageFormatGroup.bgra8888,
       );
       await _controller!.initialize();
     }
